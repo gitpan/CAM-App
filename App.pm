@@ -95,7 +95,7 @@ use CGI;
 use Exporter;
 
 our @ISA = qw(Exporter);
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 
 ### Package globals
 our %global_dbh_cache = ();  # used to hold DBH objects created by this package
@@ -254,11 +254,11 @@ sub init
    {
       $self->{cgi} = CGI->new();
    }
-   if (!exists $cfg->{myURL})
+   if ($self->{cgi} && (!exists $cfg->{myURL}))
    {
       $cfg->{myURL} = $self->{cgi}->url();
    }
-   if (!exists $cfg->{cgiurl})
+   if ($cfg->{myURL} && (!exists $cfg->{cgiurl}))
    {
       # Truncate the filename from the URL
       ($cfg->{cgiurl} = $cfg->{myURL}) =~ s,/[^/]*$,,;
@@ -337,7 +337,7 @@ Test the login information, if any.  Currently no tests are performed
 credentials.  Even though it's currently trivial, subclass methods
 should alway include the line:
 
-    return undef if (!$self->SUPER::Authenticate());
+    return undef if (!$self->SUPER::authenticate());
 
 In case the parent authenticate() method adds a test in the future.
 
@@ -364,12 +364,16 @@ empty string if the header has already been printed.
 sub header {
    my $self = shift;
 
-   if (!$self->{cgi}->{'.header_printed'}) {
-      return $self->{cgi}->header(
-                                  ($self->{cookie} ? 
-                                   (-cookie => $self->{cookie}) : ()),
-                                  @_,
-                                  );
+   my $cgi = $self->getCGI();
+   if (!$cgi->{'.header_printed'}) {
+      if ($self->{session})
+      {
+         return $cgi->header(-cookie => $self->{session}->getCookie(), @_);
+      }
+      else
+      {
+         return $cgi->header(@_);
+      }
    } else {
       return "";
    }
@@ -776,6 +780,7 @@ keys can override earlier ones):
       - myURL => URL of the current script
       - cgiurl => URL of the directory containing the current script
       - cgidir => directory containing the current script
+      - many others...
    - mod_perl => boolean indicating whether the script is in mod_perl mode
    - anything passed as arguments to this method
 

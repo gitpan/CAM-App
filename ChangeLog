@@ -1,3 +1,23 @@
+2003-02-27 16:08  chris
+
+	* App.pm: Version 0.05
+
+2003-02-27 16:07  chris
+
+	* App.pm: Fix cookie sending in session-based apps
+
+2003-02-27 13:28  chris
+
+	* README: Fix doc typo
+
+2003-02-25 16:04  chris
+
+	* App.pm: Better support for running in a non-CGI environment
+
+2003-02-25 15:13  chris
+
+	* App.pm: Documentation typo
+
 2003-01-27 08:32  chris
 
 	* App.pm: Typo correction in docs This is the CPAN v0.04 release
