@@ -1,0 +1,8 @@
+App.pm
+COPYRIGHT
+ChangeLog
+Makefile.PL
+MANIFEST
+README
+example/SampleConfig.pm
+test.pl

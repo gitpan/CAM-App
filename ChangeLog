@@ -1,0 +1,40 @@
+2003-01-08 11:52  chris
+
+	* README: Clean up the README file
+
+2003-01-08 11:05  chris
+
+	* App.pm: v0.03 Tested the core functions under the FamilyWeb
+	application.  The functions that use the optional libraries (DBI,
+	CAM::EmailTemplate, CAM::Session, CAM::SQLManager, etc) are all
+	untested.
+
+2003-01-08 10:54  chris
+
+	* App.pm, README: Fix broken loadModule
+
+2003-01-08 10:25  chris
+
+	* App.pm, MANIFEST, Makefile.PL, README, SampleConfig.pm, test.pl,
+	example/SampleConfig.pm: v0.02 - still untested, but much more
+	refined and complete
+
+2003-01-08 02:57  chris
+
+	* App.pm: Forgot to change the name of a function
+
+2003-01-08 02:54  chris
+
+	* App.pm, MANIFEST, SampleConfig.pm: Development.  Untested so
+	far...
+
+2003-01-08 01:04  chris
+
+	* App.pm, COPYRIGHT, MANIFEST, Makefile.PL, README, test.pl:
+	initial import
+
+2003-01-08 01:04  chris
+
+	* App.pm, COPYRIGHT, MANIFEST, Makefile.PL, README, test.pl:
+	Initial revision
+
