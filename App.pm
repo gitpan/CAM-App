@@ -6,23 +6,59 @@ CAM::App - Web database application framework
 
 =head1 SYNOPSIS
 
-  use CAM::App;
-  require "./Config.pm";  # user-edited config hash
+Directly instantiate this module:
 
-  my $app = CAM::App->new(Config->new(), CGI->new());
-  if (!$app->authenticate()) {
-    exit;
-  }
-  my $tmpl = $app->template("message.tmpl");
-  my $ans = $app->{cgi}->param('ans');
-  if (!$ans) {
-     $tmpl->addParams(msg => "What is your favorite color?");
-  } elsif ($ans eq "blue") {
-     $tmpl->addParams(msg => "Very good.");
-  } else {
-     $tmpl->addParams(msg => "AIIEEEEE!");
-  }
-  $tmpl->print();
+    use CAM::App;
+    require "./Config.pm";  # user-edited config hash
+    
+    my $app = CAM::App->new(Config->new(), CGI->new());
+    if (!$app->authenticate()) {
+      exit;
+    }
+    my $tmpl = $app->template("message.tmpl");
+    my $ans = $app->{cgi}->param('ans');
+    if (!$ans) {
+       $tmpl->addParams(msg => "What is your favorite color?");
+    } elsif ($ans eq "blue") {
+       $tmpl->addParams(msg => "Very good.");
+    } else {
+       $tmpl->addParams(msg => "AIIEEEEE!");
+    }
+    $tmpl->print();
+
+Subclass this module, create overridden methods (then use just like above):
+
+    package my::App;
+    use CAM::App;
+    @ISA = qw(CAM::App);
+
+    sub init {
+       my $self = shift;
+       $self->{config}->{cgidir} = ".";
+       $self->{config}->{basedir} = "..";
+       $self->{config}->{htmldir} = "../html";
+       $self->{config}->{templatedir} = "../tmpls";
+       $self->{config}->{libdir} = "../lib";
+       $self->{config}->{sqldir} = "../lib/sql";
+       $self->{config}->{error_template} = "error_tmpl.html";
+
+       $self->addDB("App", "live", "dbi:mysql:database=app", "me", "mypass");
+       $self->addDB("App", "dev", "dbi:mysql:database=appdev", "me", "mypass");
+
+       return $self->SUPER::init();
+    }
+
+    sub authenticate {
+       my $self = shift;
+       return(($self->getCGI()->param('passwd') || "") eq "secret");
+    }
+
+    sub selectDB {
+       my ($self, $params) = @_;
+       my $key = $self->{config}->{myURL} =~ m,^http://dev\.foo\.com/, ? 
+           "dev" : "live";
+       return @{$params->{$key}};
+    }
 
 =head1 DESCRIPTION
 
@@ -59,10 +95,82 @@ use CGI;
 use Exporter;
 
 our @ISA = qw(Exporter);
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 ### Package globals
-my %global_dbh_cache = ();  # used to hold DBH objects created by this package
+our %global_dbh_cache = ();  # used to hold DBH objects created by this package
+
+#--------------------------------#
+
+=head1 CONFIGURATION
+
+CAM::App relies on a few configuration variables set externally to
+achieve full functionality.  All of the following are optional, and
+the descriptions below explain what will happen if they are not
+present.  The following settings may be used:
+
+=over 2
+
+=item cookiename (default 'session')
+
+=item sessiontime (default unlimited)
+
+=item sessiontable (default 'session')
+
+These three are all used for session tracking via CAM::Session.  New
+sessions are created with the getSession() method.  The C<cookiename> can
+be any alphanumeric string.  The C<sessiontime> is the duration of the
+cookie in seconds.  The C<sessiontable> is the name of a MySQL table
+which will store the session data.  The structure of this latter table
+is described in CAM::Session.  The session tracking requires a
+database connection (see the database config parameters)
+
+=item dbistr
+
+=item dbname
+
+=item dbhost
+
+=item dbusername
+
+=item dbpassword
+
+Parameters used to open a database connection.  Either C<dbistr> or
+C<dbname> and C<dbhost> are used, but not both.  If C<dbistr> is
+present, it is used verbatim.  Otherwise the C<dbistr> is constructed
+as either C<DBI:mysql:database=dbname> or
+C<DBI:mysql:database=dbname;host=dbhost> (the latter if a dbhost is
+present in the configuration).  If dbpassword is missing, it is
+assumed to be the empty string ("").
+
+An alternative database registration scheme is described in the
+addDB() method below.
+
+=item mailhost
+
+If this config variable is set, then all EmailTemplate messages will
+go out via SMTP through this host.  If not set, EmailTemplate will use
+the C<sendmail> program on the host computer to send the message.
+
+=item templatedir
+
+The directory where CAM::Template and its subclasses look for template
+files.  If not specified and the template files are not in the current
+directory, all of the getTemplate() methods will trigger errors.
+
+=item sqldir
+
+The directory where CAM::SQLManager should look for SQL XML files.
+Without it, CAM::SQLManager will not find its XML files.
+
+=item error_template
+
+The name of a file in the C<templatedir> directory.  This template is
+used in the error() method (see below for more details).
+
+=back
+
+=cut
 
 #--------------------------------#
 
@@ -74,12 +182,14 @@ my %global_dbh_cache = ();  # used to hold DBH objects created by this package
 
 #--------------------------------#
 
-=item new config => CONFIGURATION, [cgi => CGI], [dbi => DBI], [session => SESSION]
+=item new [config => CONFIGURATION], [cgi => CGI], [dbi => DBI], [session => SESSION]
 
 Create a new application instance.  The configuration object must be a
 hash reference (blessed or unblessed, it doesn't matter).  Included in
 this distibution is the example/SampleConfig.pm module that shows what
-sort of config data should be passed to this constructor.
+sort of config data should be passed to this constructor.  Otherwise,
+you can apply configuration parameters by subclassing and overriding
+the constructor.
 
 Optional objects will be accepted as arguments; otherwise they will be
 created as needed.
@@ -91,20 +201,73 @@ sub new
    my $pkg = shift;
    my %params = (@_);
 
-   my $self = {
+   my $self = bless({
       session => $params{session},
       dbi => $params{dbh},
       cgi => $params{cgi},
       config => $params{config},
-   };
-   
-   $self = bless($self, $pkg);
-   $SIG{__DIE__} = sub {$self->{dying}=1;$self->error(@_)};
+      dbparams => {},
+   }, $pkg);
+   if (!$self->{config})
+   {
+      $self->{config} = {};
+   }
+   $self->init();
+   return $self;
+}
+
+#--------------------------------#
+
+=item init
+
+After an object is constructed, this method is called.  Subclasses may
+want to override this method to apply tweaks before calling the
+superclass initializer.  An example:
+
+   sub init {
+      my $self = shift;
+      $self->{config}->{sqldir} = "../lib/sql";
+      return $self->SUPER::init();
+   }
+
+This init function does the following:
+
+* Sets up some of the basic configuration parameters (myURL, cgidir, cgiurl)
+
+* Creates a new CGI object if one does not exist
+
+* Sets up the DBH object if one exists
+
+* Tells CAM::SQLManager where the sqldir is located if possible
+
+=cut
+
+sub init
+{
+   my $self = shift;
+
+   my $cfg = $self->{config}; # shorthand
+
+   #$SIG{__DIE__} = sub {$self->{dying}=1;$self->error(@_)};
 
    if (!$self->{cgi})
    {
       $self->{cgi} = CGI->new();
    }
+   if (!exists $cfg->{myURL})
+   {
+      $cfg->{myURL} = $self->{cgi}->url();
+   }
+   if (!exists $cfg->{cgiurl})
+   {
+      # Truncate the filename from the URL
+      ($cfg->{cgiurl} = $cfg->{myURL}) =~ s,/[^/]*$,,;
+   }
+   if (!exists $cfg->{cgidir})
+   {
+      $cfg->{cgidir} = $self->computeDir();
+   }
+
    if ($self->{dbh})
    {
       # Note that unlike getDBH(), the DBH is NOT cached in this case.
@@ -112,7 +275,7 @@ sub new
       # us the DBH, it's assumed that the caller will handle any
       # caching
 
-      $self->_applyDBH();
+      $self->applyDBH();
    }
    if ($CAM::SQLManager::VERSION && $self->{config}->{sqldir})
    {
@@ -121,7 +284,50 @@ sub new
 
    return $self;
 }
+#--------------------------------#
 
+=item computeDir
+
+Returns the directory in which this CGI script is located.  This can
+be a class or instance method.
+
+=cut
+
+sub computeDir
+{
+   my $pkg_or_self = shift;
+
+   my $cgidir;
+   if ($ENV{SCRIPT_FILENAME})
+   {
+      ($cgidir = $ENV{SCRIPT_FILENAME}) =~ s,/[^/]*$,,;
+   }
+   elsif ($ENV{PATH_TRANSLATED})
+   {
+      $cgidir = $ENV{PATH_TRANSLATED};
+   }
+   elsif ($ENV{PWD})
+   {
+      # Append the calling path (if any) to the PWD
+      if ($0 =~ /(.*)\//)
+      {
+         my $execpath = $1;
+         if ($execpath =~ m,^/,)
+         {
+            $cgidir = $execpath;
+         }
+         else
+         {
+            $cgidir = "$ENV{PWD}/$execpath";
+         }
+      }
+      else
+      {
+         $cgidir = $ENV{PWD};
+      }
+   }
+   return $cgidir;
+}
 #--------------------------------#
 
 =item authenticate
@@ -149,8 +355,9 @@ sub authenticate {
 
 =item header
 
-Compose and return a CGI header.  Returns the empty string if the
-header has already been printed.
+Compose and return a CGI header, including the CAM::Session cookie, if
+applicable (i.e. if getSession() has been called first).  Returns the
+empty string if the header has already been printed.
 
 =cut
 
@@ -214,72 +421,187 @@ sub getCGI
 
 =item getDBH
 
-Return a DBI handle.  This object is created, if one does not already
-exist, using the parameters from the configuration hash to initialize
-a DBI object.  The config variables 'dbusername' and 'dbpassword' are
-used, along with either 'dbistr' (if present) or 'dbname' and
-'dbhost'.
+=item getDBH NAME
 
-If no 'dbistr' is specified via config, MySQL is assumed.  The DBI
+Return a DBI handle.  This object is created, if one does not already
+exist, using the configuration parameters to initialize a DBI object.
+
+There are two methods for specifying how to open the database
+connection: 1) use the C<dbistr>, C<dbname>, C<dbhost>, C<dbusername>,
+and C<dbpassword> configuration variables, is set; 2) use the NAME
+argument to select from the parameters entered via the addDB() method.
+
+The config variables C<dbusername> and C<dbpassword> are used, along
+with either C<dbistr> (if present) or C<dbname> and C<dbhost>.
+If no C<dbistr> is specified via config, MySQL is assumed.  The DBI
 handle is cached in the package for future use.  This means that under
 mod_perl, the database connection only needs to be opened once.
+
+If NAME is specified, the database definitions entered from addDB()
+are searched for a matching name.  If one is found, the connection is
+established.  If the addDB() call specified multiple options, they are
+resolved via the selectDB() method, which mey be overridden by
+subclasses.
 
 =cut
 
 sub getDBH
 {
    my $self = shift;
+   my $name = shift;  # optional
 
    my $cfg = $self->{config};
-   if ((!$self->{dbh}) && ($cfg->{dbistr} || $cfg->{dbname}) &&
-       $cfg->{dbusername})
+
+   if (!$self->{dbh})
    {
-      if (!$self->loadModule("DBI"))
-      {
-         $self->error("Internal error: Failed to load the DBI library");
-      }
 
-      my $dbistr = $cfg->{dbistr};
-      if (!$dbistr)
+      my $dbistr;
+      my $dbuser;
+      my $dbpass;
+      
+      if ($name)
       {
-         $dbistr = "DBI:mysql:database=".$cfg->{dbname};
-         $dbistr .= ";host=".$cfg->{dbhost} if ($cfg->{dbhost});
-      }
-
-      # First try to retrieve a global dbh object, shared between
-      # CAM::App objects, or left over from a previous mod_perl run.
-      # Construct a unique key from the connection parameters
-
-      my $cache_key = $dbistr . ";username=".$cfg->{dbusername};
-
-      if ($global_dbh_cache{$cache_key})
-      {
-         $self->{dbh} = $global_dbh_cache{$cache_key};
-      }
-      else
-      {
-         my $passwd = $cfg->{dbpassword};
-         $passwd = "" if (!defined $passwd);  # fix possible undef
-         $self->{dbh} = DBI->connect($dbistr,
-                                     $cfg->{dbusername}, $passwd,
-                                     {autocommit => 0, RaiseError => 1});
-         if (!$self->{dbh})
+         my $dbparams = $self->{dbparams}->{$name};
+         if ($dbparams)
          {
-            $self->error("Failed to connect to the database: " . 
-                         ($DBI::errstr || $! || "(unknown error)"));
+            ($dbistr, $dbuser, $dbpass) = $self->selectDB($dbparams);
          }
-         $self->_applyDBH();
-         $global_dbh_cache{$cache_key} = $self->{dbh};
+      }
+      elsif (($cfg->{dbistr} || $cfg->{dbname}) && $cfg->{dbusername})
+      {
+         $dbistr = $cfg->{dbistr};
+         if (!$dbistr)
+         {
+            $dbistr = "DBI:mysql:database=".$cfg->{dbname};
+            $dbistr .= ";host=".$cfg->{dbhost} if ($cfg->{dbhost});
+         }
+         $dbuser = $cfg->{dbusername};
+         $dbpass = $cfg->{dbpassword};
+      }
+
+      if ($dbistr)  # else we will return undef by default below
+      {
+         if (!$self->loadModule("DBI"))
+         {
+            $self->error("Internal error: Failed to load the DBI library");
+         }
+         
+         # First try to retrieve a global dbh object, shared between
+         # CAM::App objects, or left over from a previous mod_perl run.
+         # Construct a unique key from the connection parameters
+         
+         my $cache_key = $dbistr . ";username=$dbuser";
+         
+         if ($global_dbh_cache{$cache_key})
+         {
+            $self->{dbh} = $global_dbh_cache{$cache_key};
+         }
+         else
+         {
+            $dbpass = "" if (!defined $dbpass);  # fix possible undef
+            $self->{dbh} = DBI->connect($dbistr, $dbuser, $dbpass,
+                                        {autocommit => 0, RaiseError => 1});
+            if (!$self->{dbh})
+            {
+               $self->error("Failed to connect to the database: " . 
+                            ($DBI::errstr || $! || "(unknown error)"));
+            }
+            $self->applyDBH();
+            $global_dbh_cache{$cache_key} = $self->{dbh};
+         }
       }
    }
    return $self->{dbh};
 }
 
 #--------------------------------#
-# Internal function:
-# Tell other packages to use this new DBH object.
 
-sub _applyDBH
+=item addDB NAME, LABEL, DBISTR, USERNAME, PASSWORD
+
+Add a record to the list of available database connections.  The NAME
+specified here is what you would pass to getDBH() later.  The LABEL is
+used by selectDB(), if necessary, to choose between database options.
+If multiple entries with the same NAME and LABEL are entered, only the
+last one is remembered.
+
+=cut
+
+sub addDB
+{
+   my $self = shift;
+   my $name = shift;
+   my $label = shift;
+   my $dbistr = shift;
+   my $user = shift;
+   my $pass = shift;
+
+   $self->{dbparams}->{$name} ||= {};  # create if missing
+   $self->{dbparams}->{$name}->{$label} = [$dbistr, $user, $pass];
+   return $self;
+}
+#--------------------------------#
+
+=item selectDB DB_PARAMETERS
+
+Given a data structure of possible database connection parameters,
+select one to use for the database.  Returns an array with C<dbistr>,
+C<dbusername> and C<dbpassword> values, or an empty array on failure.
+
+The incoming data structure is a hash reference where the keys are
+labels for the various database connection possibilities and the
+values are array references with three elements: dbistr, dbusername
+and dbpassword.  For example:
+
+   {
+      live     => ["dbi:mysql:database=game",     "gameuser", "gameon"],
+      internal => ["dbi:mysql:database=game_int", "gameuser", "gameon"],
+      dev      => ["dbi:mysql:database=game_dev", "chris", "pass"],
+   }
+
+This default implementation simply picks the first key in alphabetical
+order.  Subclasses will almost certainly want to override this method.
+For example:
+
+   sub selectDB {
+      my ($self, $params) = @_;
+      if ($self->getCGI()->url() =~ m,/dev/, && $params->{dev}) {
+         return @{$params->{dev}};
+      } elsif ($self->getCGI()->url() =~ /internal/ && $params->{internal}) {
+         return @{$params->{internal}};
+      } elsif ($params->{live}) {
+         return @{$params->{live}};
+      }
+      return ();
+   }
+
+=cut
+
+sub selectDB
+{
+   my $self = shift;
+   my $params = shift;
+
+   # Find the first key alphabetically, if any
+   my $key = (sort keys %$params)[0];
+   if ($key)
+   {
+      return @{$params->{$key}};
+   }
+   return ();
+}
+
+#--------------------------------#
+
+=item applyDBH
+
+Tell other packages to use this new DBH object.  This method is called
+from init() and getDBH() as needed.  This contacts the following
+modules, if they are already loaded: 
+CAM::Session, CAM::SQLManager, and CAM::Template::Cache.
+
+=cut
+
+sub applyDBH
 {
    my $self = shift;
 
@@ -312,6 +634,10 @@ sub getSession
          $self->error("Internal error: Failed to load the CAM::Session library");
       }
 
+      if (!$self->getDBH())
+      {
+         $self->error("No database connection, so a session could not be recorded");
+      }
       if ($self->{config}->{cookiename})
       {
          CAM::Session->setCookieName($self->{config}->{cookiename});
@@ -423,9 +749,9 @@ sub _template {
       $template = $module->new();
    }
 
-   my $path = $self->{config}->{templatepath};
-   $path .= "/" if ($path && $path !~ /\/$/);
-   if (!$template->setFilename($path . $file))
+   my $dir = $self->{config}->{templatedir} || "";
+   $dir .= "/" if ($dir && $dir !~ /\/$/);
+   if (!$template->setFilename($dir . $file))
    {
       $self->error("Internal error: problem locating the web page template")
           unless ($self->{in_error});
@@ -446,9 +772,11 @@ build your own templates you may want to use this explicitly.
 The following value are set (and the order is significant, since later
 keys can override earlier ones):
 
-   - the configuration variables
+   - the configuration variables, including:
+      - myURL => URL of the current script
+      - cgiurl => URL of the directory containing the current script
+      - cgidir => directory containing the current script
    - mod_perl => boolean indicating whether the script is in mod_perl mode
-   - myURL => URL of the current script
    - anything passed as arguments to this method
 
 Subclasses may override this to add more fields to the template.  We
@@ -482,7 +810,6 @@ sub prefillTemplate
 
                              %{$self->{config}},
                              mod_perl => (exists $ENV{MOD_PERL}),
-                             myURL => $self->{cgi}->url(),
                              @_,
                              ))
    {
@@ -499,7 +826,7 @@ Prints an error message to the browser and exits.
 
 If the 'error_template' configuration parameter is set, then that
 template is used to display the error.  In that case, the error
-message will me substituted into the ::error:: template variable.
+message will be substituted into the ::error:: template variable.
 
 For the sake of your error template HTML layout, use these guidelines:
 

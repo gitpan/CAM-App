@@ -1,3 +1,21 @@
+2003-01-27 08:32  chris
+
+	* App.pm: Typo correction in docs This is the CPAN v0.04 release
+
+2003-01-23 14:40  chris
+
+	* App.pm: comment out die handler
+
+2003-01-23 14:03  chris
+
+	* App.pm: bug: missing "=cut"
+
+2003-01-22 18:06  chris
+
+	* App.pm: v0.04 Tons of documentation Split up some functions Added
+	new methods: addDB(), selectDB() Enhanced DBH connection Prefill
+	some config vars
+
 2003-01-08 11:52  chris
 
 	* README: Clean up the README file
