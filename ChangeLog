@@ -1,3 +1,24 @@
+2003-03-14 17:59  chris
+
+	* Makefile.PL, README: Update documentation for v0.07
+
+2003-03-14 17:49  chris
+
+	* App.pm: v0.07 Doc updates CGI::Compress::Gzip support Added
+	DESTROY method so subclasses can safely call
+
+2003-03-09 09:54  chris
+
+	* App.pm: Another one I missed
+
+2003-03-09 09:51  chris
+
+	* App.pm: Simple doc cleanup
+
+2003-03-07 16:28  chris
+
+	* App.pm: v0.06 Create addStatusMessage() and related methods
+
 2003-02-27 16:08  chris
 
 	* App.pm: Version 0.05

@@ -12,11 +12,10 @@ Directly instantiate this module:
     require "./Config.pm";  # user-edited config hash
     
     my $app = CAM::App->new(Config->new(), CGI->new());
-    if (!$app->authenticate()) {
-      exit;
-    }
+    $app->authenticate() or $app->error("Login failed");
+    
     my $tmpl = $app->template("message.tmpl");
-    my $ans = $app->{cgi}->param('ans');
+    my $ans = $app->getCGI()->param('ans');
     if (!$ans) {
        $tmpl->addParams(msg => "What is your favorite color?");
     } elsif ($ans eq "blue") {
@@ -31,7 +30,7 @@ Subclass this module, create overridden methods (then use just like above):
     package my::App;
     use CAM::App;
     @ISA = qw(CAM::App);
-
+    
     sub init {
        my $self = shift;
        $self->{config}->{cgidir} = ".";
@@ -41,18 +40,18 @@ Subclass this module, create overridden methods (then use just like above):
        $self->{config}->{libdir} = "../lib";
        $self->{config}->{sqldir} = "../lib/sql";
        $self->{config}->{error_template} = "error_tmpl.html";
-
+       
        $self->addDB("App", "live", "dbi:mysql:database=app", "me", "mypass");
        $self->addDB("App", "dev", "dbi:mysql:database=appdev", "me", "mypass");
-
+       
        return $self->SUPER::init();
     }
-
+    
     sub authenticate {
        my $self = shift;
        return(($self->getCGI()->param('passwd') || "") eq "secret");
     }
-
+    
     sub selectDB {
        my ($self, $params) = @_;
        my $key = $self->{config}->{myURL} =~ m,^http://dev\.foo\.com/, ? 
@@ -88,14 +87,13 @@ use CGI;
 
 # The following modules may loaded externally, if at all.  This module
 # detects their presence by looking for their $VERSION variables.
+#   CGI::Compress::Gzip
 #   CAM::Session
 #   CAM::SQLManager
 #   CAM::Template::Cache
 
-use Exporter;
-
-our @ISA = qw(Exporter);
-our $VERSION = '0.05';
+our @ISA = qw();
+our $VERSION = '0.07';
 
 ### Package globals
 our %global_dbh_cache = ();  # used to hold DBH objects created by this package
@@ -202,11 +200,12 @@ sub new
    my %params = (@_);
 
    my $self = bless({
-      session => $params{session},
-      dbi => $params{dbh},
       cgi => $params{cgi},
       config => $params{config},
+      dbi => $params{dbh},
       dbparams => {},
+      session => $params{session},
+      status => [],
    }, $pkg);
    if (!$self->{config})
    {
@@ -252,7 +251,15 @@ sub init
 
    if (!$self->{cgi})
    {
-      $self->{cgi} = CGI->new();
+      if ($ENV{HTTP_ACCEPT_ENCODING} && # don't bother unless it's possible
+          $self->loadModule("CGI::Compress::Gzip"))
+      {
+         $self->{cgi} = CGI::Compress::Gzip->new();
+      }
+      else
+      {
+         $self->{cgi} = CGI->new();
+      }
    }
    if ($self->{cgi} && (!exists $cfg->{myURL}))
    {
@@ -795,7 +802,6 @@ recommend implementing override methods like this:
       $template->addParams(
                            myparam => myvalue,
                            # any other key-value pairs or hashes ...
-
                            @_,  # add this LAST to override any earlier params
                            );
       return $self;
@@ -821,6 +827,60 @@ sub prefillTemplate
       $self->error("Internal error: problem setting template parameters")
           unless ($self->{in_error});
    }
+   return $self;
+}
+#--------------------------------#
+
+=item addStatusMessage MESSAGE
+
+This is a handy repository for non-fatal status messages accumulated
+by the application.  [Fatal messages can be handled by the error()
+method] Applications who use this mechanism frequently may wish to
+override prefillTemplate to set something like:
+
+    status => join("<br>", $app->getStatusMessages())
+
+so in template HTML you could, for example, display this via
+
+    <style> .status { color: red } </style>
+    ...
+    ??status??<div class="status">::status::</div>??status??
+
+=cut
+
+sub addStatusMessage
+{
+   my $self = shift;
+   push @{$self->{status}}, join("", @_);
+   return $self;
+}
+#--------------------------------#
+
+=item getStatusMessages
+
+Returns the array of messages that had been accumulated by the
+application via the addStatusMessage() method.
+
+=cut
+
+sub getStatusMessages
+{
+   my $self = shift;
+   return @{$self->{status}};
+}
+#--------------------------------#
+
+=item clearStatusMessages
+
+Clears the array of messages that had been accumulated by the
+application via the addStatusMessage() method.
+
+=cut
+
+sub clearStatusMessages
+{
+   my $self = shift;
+   $self->{status} = [];
    return $self;
 }
 #--------------------------------#
@@ -866,7 +926,7 @@ sub error {
 
    if (!$errTmpl)
    {
-      print "Internal error: $msg<br>\n ";
+      print "Internal error: $msg\n";
    }
    else
    {
@@ -906,6 +966,11 @@ sub loadModule {
    return $$ver_ref;
 }
 #--------------------------------#
+
+sub DESTROY
+{
+   # do nothing special, just here to silence warnings
+}
 
 1;
 __END__

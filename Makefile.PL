@@ -10,6 +10,7 @@ WriteMakefile(
 
                  ## Optional
                  #'CGI::Cookie'              => 1.00,
+                 #'CGI::Compress::Gzip'      => 0.11,
                  #'DBI'                      => 1.10,
                  #'CAM::Session'             => 0.01,
                  #'CAM::SQLManager'          => 0.01,

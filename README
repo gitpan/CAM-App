@@ -11,7 +11,7 @@ Install via the usual:
   make install
 
 This module implements a basic framework for building web database
-applications with the CAM library.  It is designed to be subclassed
+applications with the CAM libraries.  It is designed to be subclassed
 (see SUBCLASSING below) by your software to provide web functionality
 with low overhead.  It is intended for the usual Apache, Perl, MySQL,
 and Linux environment, but as little as possible is hardcoded for that
@@ -22,6 +22,7 @@ External libraries referenced:
     CGI
     CAM::Template
   Optional: (NOTE! Some of these have not yet been released to CPAN)
+    CGI::Compress::Gzip
     DBI
     CAM::Session
     CAM::SQLManager
@@ -42,6 +43,7 @@ main advantages over that module are:
  * Centralized error handling
  * Simple email sending (via CAM::EmailTemplate)
  * Integrates a very simple configuration mechanism
+ * Can auto-compress output HTML
 
 It's main disadvantages vs. CGI::Application are:
 
@@ -51,9 +53,9 @@ It's main disadvantages vs. CGI::Application are:
 
 And features which may or may not be advantages:
 
- * Behaves as a helper instead of an environment
+ * Can behave as a helper instead of a harness
  * Uses CAM::Template instead of HTML::Template
- * Caller sets up explicit scripted run modes instead of
+ * Caller sets up explicitly scripted run modes instead of
    CGI::Application's run modes.  (if you think this is an advantage,
    then CGI::Application really was never an option for you, was it?)
 
@@ -66,13 +68,16 @@ with organization.
 --- TO DO ---
 
 Future versions of CAM::App will hopefully accomplish some of the
-following goals.  None of these have been architected yet.
+following goals (in the order that they interest me today).
 
-* Extend the integration with CAM::SQLManager and CAM::SQLObject
 * Simplify the use of CAM::Session for authentication
+  [This is done in CAM::UserApp, which has not yet been released to
+   the public as of this writing.  Email me if you are interested]
+* Aid for multilingual support in templates and in-code messages
+  (Locale::Maketext?)
 * Generalize the template mechanism so other template packages are
   possible
-* Aid for multilingual support in templates and in-code messages
+* Extend the integration with CAM::SQLManager and CAM::SQLObject
 
 
 --- SUBCLASSING ---
@@ -94,12 +99,14 @@ SampleConfig.pm, but you can quite easily build your own from scratch.
    cp example/SampleConfig.pm MyConfig.pm
    edit MyConfig.pm
 
-3) Set up your CGI script to use MyApp and MyConfig.  It should contain lines something like this.
+3) Set up your CGI script to use MyApp and MyConfig.  It should
+contain lines something like this.
 
    use lib qw(.); # or where ever you stored the new .pm file
-   use CGI;
    use MyApp;
    use MyConfig;
    
-   my $app = MyApp->new(config => MyConfig->new(), cgi => CGI->new());
-   exit if (!$app->authenticate());
+   my $app = MyApp->new(config => MyConfig->new());
+   $app->authenticate() or $app->error("Login failed");
+   my $cgi = $app->getCGI();
+   ...
