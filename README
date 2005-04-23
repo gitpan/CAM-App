@@ -1,14 +1,37 @@
-CAM::App
+CAM::App - Web database application framework
 
-"CAM" stands for Clotho Advanced Media, www.clotho.com, which
-supported most of the development of this module.  Contact us at
-cpan@clotho.com.
 
-Install via the usual:
+LICENSE
+
+Copyright 2005 Clotho Advanced Media, Inc., <cpan@clotho.com>
+
+This library is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
+
+
+ABOUT CLOTHO
+
+"CAM" stands for Clotho Advanced Media Inc. (www.clotho.com) which
+developed this module.  Contact us at cpan@clotho.com.
+
+
+INSTALLATION
+
+Install via one of the following:
   perl Makefile.PL
   make
   make test
   make install
+
+or
+
+  perl Build.PL
+  perl Build
+  perl Build test
+  perl Build install
+
+
+DESCRIPTION
 
 This module implements a basic framework for building web database
 applications with the CAM libraries.  It is designed to be subclassed
@@ -31,8 +54,8 @@ External libraries referenced:
     CAM::EmailTemplate::SMTP
     CAM::Template::Cache
 
-This module is released under the GNU Public License v2.  See
-"COPYING".
+
+COMPARISON
 
 The Perl module CAM::App most closely resembles is CGI::Application. It's
 main advantages over that module are:
@@ -65,22 +88,8 @@ for apps that are much more free form, and just need a little help
 with organization.
 
 
---- TO DO ---
 
-Future versions of CAM::App will hopefully accomplish some of the
-following goals (in the order that they interest me today).
-
-* Simplify the use of CAM::Session for authentication
-  [This is done in CAM::UserApp, which has not yet been released to
-   the public as of this writing.  Email me if you are interested]
-* Aid for multilingual support in templates and in-code messages
-  (Locale::Maketext?)
-* Generalize the template mechanism so other template packages are
-  possible
-* Extend the integration with CAM::SQLManager and CAM::SQLObject
-
-
---- SUBCLASSING ---
+SUBCLASSING
 
 There are a few important steps for you to use this library.
 

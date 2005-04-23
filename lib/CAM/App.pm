@@ -4,12 +4,22 @@ package CAM::App;
 
 CAM::App - Web database application framework
 
+=head1 LICENSE
+
+Copyright 2005 Clotho Advanced Media, Inc., <cpan@clotho.com>
+
+This library is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself.
+
 =head1 SYNOPSIS
 
-Directly instantiate this module:
+You can either directly instantiate this module, or create a subclass,
+creating overridden methods as needed.
+
+Direct use:
 
     use CAM::App;
-    require "./Config.pm";  # user-edited config hash
+    require "Config.pm";  # user-edited config hash
     
     my $app = CAM::App->new(Config->new(), CGI->new());
     $app->authenticate() or $app->error("Login failed");
@@ -25,7 +35,7 @@ Directly instantiate this module:
     }
     $tmpl->print();
 
-Subclass this module, create overridden methods (then use just like above):
+Subclass:  (then use just like above, replacing CAM::App with my::App)
 
     package my::App;
     use CAM::App;
@@ -33,12 +43,14 @@ Subclass this module, create overridden methods (then use just like above):
     
     sub init {
        my $self = shift;
+       
+       my $basedir = "..";
        $self->{config}->{cgidir} = ".";
-       $self->{config}->{basedir} = "..";
-       $self->{config}->{htmldir} = "../html";
-       $self->{config}->{templatedir} = "../tmpls";
-       $self->{config}->{libdir} = "../lib";
-       $self->{config}->{sqldir} = "../lib/sql";
+       $self->{config}->{basedir} = $basedir;
+       $self->{config}->{htmldir} = "$basedir/html";
+       $self->{config}->{templatedir} = "$basedir/tmpls";
+       $self->{config}->{libdir} = "$basedir/lib";
+       $self->{config}->{sqldir} = "$basedir/lib/sql";
        $self->{config}->{error_template} = "error_tmpl.html";
        
        $self->addDB("App", "live", "dbi:mysql:database=app", "me", "mypass");
@@ -73,6 +85,7 @@ to be subclassed with more specific functions overriding its behavior.
 require 5.005_62;
 use strict;
 use warnings;
+use File::Spec;
 use Carp;
 use CGI;
 
@@ -93,7 +106,7 @@ use CGI;
 #   CAM::Template::Cache
 
 our @ISA = qw();
-our $VERSION = '0.07';
+our $VERSION = '1.07';
 
 ### Package globals
 our %global_dbh_cache = ();  # used to hold DBH objects created by this package
@@ -125,19 +138,22 @@ database connection (see the database config parameters)
 
 =item dbistr
 
-=item dbname
-
 =item dbhost
+
+=item dbport
+
+=item dbname
 
 =item dbusername
 
 =item dbpassword
 
 Parameters used to open a database connection.  Either C<dbistr> or
-C<dbname> and C<dbhost> are used, but not both.  If C<dbistr> is
-present, it is used verbatim.  Otherwise the C<dbistr> is constructed
-as either C<DBI:mysql:database=dbname> or
-C<DBI:mysql:database=dbname;host=dbhost> (the latter if a dbhost is
+C<dbhost>, C<dbport> and C<dbname> are used, but not both.  If
+C<dbistr> is present, it is used verbatim.  Otherwise the C<dbistr> is
+constructed as either
+C<DBI:mysql:database=dbname;host=dbhost;port=dbport> (the host and
+port clauses are omitted if the corresponding variables are not
 present in the configuration).  If dbpassword is missing, it is
 assumed to be the empty string ("").
 
@@ -166,6 +182,12 @@ Without it, CAM::SQLManager will not find its XML files.
 The name of a file in the C<templatedir> directory.  This template is
 used in the error() method (see below for more details).
 
+=item sessionclass
+
+The Perl package to use for session instantiation.  The default is
+CAM::Session.  CAM::App is closely tied to CAM::Session, so only a
+CAM::Session subclass will likely function here.
+
 =back
 
 =cut
@@ -190,7 +212,13 @@ you can apply configuration parameters by subclassing and overriding
 the constructor.
 
 Optional objects will be accepted as arguments; otherwise they will be
-created as needed.
+created as needed.  If you pass an argument with value undef, that
+will be interpreted as meaning that you don't want the object
+auto-created.  For example, C<new()> will cause a CGI object to be
+created, C<new(cgi =E<gt> $cgi)> will use the passed CGI object, and
+C<new(cgi =E<gt> undef)> will not create use CGI object at all.  The
+latter is useful where the creation of a CGI object may be
+destructive, for example in a SOAP::Lite environment.
 
 =cut
 
@@ -200,13 +228,15 @@ sub new
    my %params = (@_);
 
    my $self = bless({
-      cgi => $params{cgi},
-      config => $params{config},
-      dbi => $params{dbh},
       dbparams => {},
-      session => $params{session},
       status => [],
    }, $pkg);
+   $self->applyDBH(); # clear any cached values
+
+   foreach my $key (qw(cgi dbh session config))
+   {
+      $self->{$key} = $params{$key} if (exists $params{$key});
+   }
    if (!$self->{config})
    {
       $self->{config} = {};
@@ -231,9 +261,10 @@ superclass initializer.  An example:
 
 This init function does the following:
 
-* Sets up some of the basic configuration parameters (myURL, cgidir, cgiurl)
+* Sets up some of the basic configuration parameters 
+(myURL, fullURL, cgidir, cgiurl)
 
-* Creates a new CGI object if one does not exist
+* Creates a new CGI object if one does not exist (as per getCGI)
 
 * Sets up the DBH object if one exists
 
@@ -249,32 +280,42 @@ sub init
 
    #$SIG{__DIE__} = sub {$self->{dying}=1;$self->error(@_)};
 
-   if (!$self->{cgi})
+   ## Initialize session package
+   $cfg->{sessionclass} ||= "CAM::Session";
+
+   ## Initialize CGI
+   $self->getCGI(); # initialize CGI if possible/appropriate
+
+   ## Initialize myURL
+   if (!exists $cfg->{myURL})
    {
-      if ($ENV{HTTP_ACCEPT_ENCODING} && # don't bother unless it's possible
-          $self->loadModule("CGI::Compress::Gzip"))
-      {
-         $self->{cgi} = CGI::Compress::Gzip->new();
-      }
-      else
-      {
-         $self->{cgi} = CGI->new();
-      }
+      $cfg->{myURL} = CGI->url();
    }
-   if ($self->{cgi} && (!exists $cfg->{myURL}))
+   if (!exists $cfg->{fullURL} && $self->getCGI())
    {
-      $cfg->{myURL} = $self->{cgi}->url();
+      # For file uploads, the self_url call generates a
+      #    "Use of uninitialized value at (eval 29) line 8."
+      # error because of a bug in CGI v2.46.
+      # Block this by turning off warnings for this line.
+      no warnings;
+      $cfg->{fullURL} = $self->getCGI()->self_url();
+      use warnings;
    }
+
+   ## Initialize cgiurl
    if ($cfg->{myURL} && (!exists $cfg->{cgiurl}))
    {
       # Truncate the filename from the URL
-      ($cfg->{cgiurl} = $cfg->{myURL}) =~ s,/[^/]*$,,;
+      ($cfg->{cgiurl} = $cfg->{myURL}) =~ s,/[^/\\]*$,,;
    }
+
+   ## Initialize cgidir
    if (!exists $cfg->{cgidir})
    {
       $cfg->{cgidir} = $self->computeDir();
    }
 
+   ## Initialize DBH
    if ($self->{dbh})
    {
       # Note that unlike getDBH(), the DBH is NOT cached in this case.
@@ -284,6 +325,8 @@ sub init
 
       $self->applyDBH();
    }
+
+   ## Initialize sqldir
    if ($CAM::SQLManager::VERSION && $self->{config}->{sqldir})
    {
       CAM::SQLManager->setDirectory($self->{config}->{sqldir});
@@ -307,7 +350,7 @@ sub computeDir
    my $cgidir;
    if ($ENV{SCRIPT_FILENAME})
    {
-      ($cgidir = $ENV{SCRIPT_FILENAME}) =~ s,/[^/]*$,,;
+      ($cgidir = $ENV{SCRIPT_FILENAME}) =~ s,/[^/\\]*$,,;
    }
    elsif ($ENV{PATH_TRANSLATED})
    {
@@ -316,22 +359,34 @@ sub computeDir
    elsif ($ENV{PWD})
    {
       # Append the calling path (if any) to the PWD
-      if ($0 =~ /(.*)\//)
+      if ($0 =~ /(.*)[\/\\]/)
       {
          my $execpath = $1;
-         if ($execpath =~ m,^/,)
+         if ($execpath =~ m,^[/\\],)
          {
             $cgidir = $execpath;
          }
          else
          {
-            $cgidir = "$ENV{PWD}/$execpath";
+            $cgidir = File::Spec->catdir($ENV{PWD}, $execpath);
          }
       }
       else
       {
          $cgidir = $ENV{PWD};
       }
+   }
+   # Fix odd cases, like a script called from "./myscript" or "../myscript
+   if ($cgidir)
+   {
+      $cgidir =~ s,/[^/]+/\.\.,,g;    # remove "/dir/.."
+      $cgidir =~ s,\\[^\\]+\\\.\.,,g; # remove "\dir\.."
+      $cgidir =~ s,/\./,/,g;          # change "path/./path" to "path/path"
+      $cgidir =~ s,\\\.\\,\\,g;       # change "path\.\path" to "path\path"
+      $cgidir =~ s,/\.$,,g;           # change "path/." to "path"
+      $cgidir =~ s,\\\.$,,g;          # change "path\." to "path"
+      $cgidir =~ s,//+$,/,g;          # change "path///path" to "path/path"
+      $cgidir =~ s,\\\\+$,\\,g;       # change "path\\\path" to "path\path"
    }
    return $cgidir;
 }
@@ -372,7 +427,20 @@ sub header {
    my $self = shift;
 
    my $cgi = $self->getCGI();
-   if (!$cgi->{'.header_printed'}) {
+   if (!$cgi)
+   {
+      if (!$self->{header_printed})
+      {
+         $self->{header_printed} = 1;
+         return "Content-Type: text/html\n\n";
+      }
+      else
+      {
+         return "";
+      }
+   }
+   elsif (!$cgi->{'.header_printed'})
+   {
       if ($self->{session})
       {
          return $cgi->header(-cookie => $self->{session}->getCookie(), @_);
@@ -381,7 +449,9 @@ sub header {
       {
          return $cgi->header(@_);
       }
-   } else {
+   }
+   else
+   {
       return "";
    }
 }
@@ -419,13 +489,31 @@ sub getConfig
 
 =item getCGI
 
-Returns the CGI object.
+Returns the CGI object.  If a CGI object does not exist, one is
+created.  If this application is initialized explicitly like 
+C<new(cgi =E<gt> undef)>, then no new CGI object is created.  This
+behavior is useful for non-CGI applications, like SOAP handlers.
+
+CGI::Compress::Gzip is preferred over CGI.  The former will be used if
+it is installed and the client browser supports gzip encoding.
 
 =cut
 
 sub getCGI
 {
    my $self = shift;
+   if (!exists $self->{cgi})
+   {
+      if ($ENV{HTTP_ACCEPT_ENCODING} && # don't bother unless it's possible
+          $self->loadModule("CGI::Compress::Gzip"))
+      {
+         $self->{cgi} = CGI::Compress::Gzip->new();
+      }
+      else
+      {
+         $self->{cgi} = CGI->new();
+      }
+   }
    return $self->{cgi};
 }
 #--------------------------------#
@@ -438,9 +526,10 @@ Return a DBI handle.  This object is created, if one does not already
 exist, using the configuration parameters to initialize a DBI object.
 
 There are two methods for specifying how to open the database
-connection: 1) use the C<dbistr>, C<dbname>, C<dbhost>, C<dbusername>,
-and C<dbpassword> configuration variables, is set; 2) use the NAME
-argument to select from the parameters entered via the addDB() method.
+connection: 1) use the C<dbistr>, C<dbhost>, C<dbport>, C<dbname>,
+C<dbusername>, and C<dbpassword> configuration variables, is set; 2)
+use the NAME argument to select from the parameters entered via the
+addDB() method.
 
 The config variables C<dbusername> and C<dbpassword> are used, along
 with either C<dbistr> (if present) or C<dbname> and C<dbhost>.
@@ -456,6 +545,62 @@ subclasses.
 
 =cut
 
+sub getDBInfo
+{
+   my $self = shift;
+   my $name = shift;  # optional
+
+   my $dbistr;
+   my $dbuser;
+   my $dbpass;
+
+   my $cfg = $self->{config}; # shorthand
+   
+   if ($name)
+   {
+      # Retrieve parameters for a named handle
+      my $dbparams = $self->{dbparams}->{$name};
+      if ($dbparams)
+      {
+         ($dbistr, $dbuser, $dbpass) = $self->selectDB($dbparams);
+      }
+   }
+   elsif (($cfg->{dbistr} || $cfg->{dbname}) && $cfg->{dbusername})
+   {
+      ($dbistr, $dbuser, $dbpass) = $self->getDBInfoFromCfg($cfg);
+   }
+
+   return ($dbistr, $dbuser, $dbpass);
+}
+
+sub getDBInfoFromCfg
+{
+   my $self = shift;
+   my $cfg = shift;
+
+   # Get the config parameters for the handle
+   # Use "dbistr" if possible, otherwise use "dbname", "dbhost"
+   # and "dbport"
+   
+   my $dbistr;
+   my $dbuser;
+   my $dbpass;
+   
+   if ($cfg)
+   {
+      $dbistr = $cfg->{dbistr};
+      if (!$dbistr && $cfg->{dbname})
+      {
+         $dbistr = "DBI:mysql:database=".$cfg->{dbname};
+         $dbistr .= ";host=".$cfg->{dbhost} if ($cfg->{dbhost});
+         $dbistr .= ";port=".$cfg->{dbport} if ($cfg->{dbport});
+      }
+      $dbuser = $cfg->{dbusername};
+      $dbpass = $cfg->{dbpassword};
+   }
+   return ($dbistr, $dbuser, $dbpass);
+}
+
 sub getDBH
 {
    my $self = shift;
@@ -463,34 +608,19 @@ sub getDBH
 
    my $cfg = $self->{config};
 
-   if (!$self->{dbh})
+   # Build the DBH if there is no DBH yet, or if the requested one has
+   # a different name from the previous one.
+   if ((!exists $self->{dbh}) ||
+       ($name && ((!$self->{dbhname}) ||
+                  $self->{dbhname} ne $name)))
    {
+      my ($dbistr, $dbuser, $dbpass) = $self->getDBInfo($name);
 
-      my $dbistr;
-      my $dbuser;
-      my $dbpass;
-      
-      if ($name)
+      if (!$dbistr)
       {
-         my $dbparams = $self->{dbparams}->{$name};
-         if ($dbparams)
-         {
-            ($dbistr, $dbuser, $dbpass) = $self->selectDB($dbparams);
-         }
+         # return undef below
       }
-      elsif (($cfg->{dbistr} || $cfg->{dbname}) && $cfg->{dbusername})
-      {
-         $dbistr = $cfg->{dbistr};
-         if (!$dbistr)
-         {
-            $dbistr = "DBI:mysql:database=".$cfg->{dbname};
-            $dbistr .= ";host=".$cfg->{dbhost} if ($cfg->{dbhost});
-         }
-         $dbuser = $cfg->{dbusername};
-         $dbpass = $cfg->{dbpassword};
-      }
-
-      if ($dbistr)  # else we will return undef by default below
+      else
       {
          if (!$self->loadModule("DBI"))
          {
@@ -501,26 +631,40 @@ sub getDBH
          # CAM::App objects, or left over from a previous mod_perl run.
          # Construct a unique key from the connection parameters
          
-         my $cache_key = $dbistr . ";username=$dbuser";
+         $dbpass = "" if (!defined $dbpass);  # fix possible undef
+
+         my $cache_key = ($dbistr .
+                          ";username=".($dbuser || "") .
+                          ";password=".($dbpass));
          
          if ($global_dbh_cache{$cache_key})
          {
+            #print STDERR "reuse cached dbh for key $cache_key\n";
             $self->{dbh} = $global_dbh_cache{$cache_key};
          }
          else
          {
-            $dbpass = "" if (!defined $dbpass);  # fix possible undef
+            #print STDERR "open new dbh as key $cache_key\n";
             $self->{dbh} = DBI->connect($dbistr, $dbuser, $dbpass,
-                                        {autocommit => 0, RaiseError => 1});
+                                        {autocommit => 0, 
+                                         RaiseError => !$self->{config}->{dbnonfatal}});
             if (!$self->{dbh})
             {
-               $self->error("Failed to connect to the database: " . 
-                            ($DBI::errstr || $! || "(unknown error)"));
+               if (!$self->{config}->{dbnonfatal})
+               {
+                  $self->error("Failed to connect to the database: " . 
+                               ($DBI::errstr || $! || "(unknown error)"));
+               }
             }
-            $self->applyDBH();
             $global_dbh_cache{$cache_key} = $self->{dbh};
          }
       }
+      $self->{dbhname} = $name;
+      $self->applyDBH();
+   }
+   else
+   {
+      #print STDERR "reuse existing dbh\n";
    }
    return $self->{dbh};
 }
@@ -617,12 +761,9 @@ sub applyDBH
    my $self = shift;
 
    my $dbh = $self->{dbh};
-   if ($dbh)
-   {
-      CAM::Session->setDBH($dbh)         if ($CAM::Session::VERSION);
-      CAM::SQLManager->setDBH($dbh)      if ($CAM::SQLManager::VERSION);
-      CAM::Template::Cache->setDBH($dbh) if ($CAM::Template::Cache::VERSION);
-   }
+   CAM::Session->setDBH($dbh)         if ($CAM::Session::VERSION);
+   CAM::SQLManager->setDBH($dbh)      if ($CAM::SQLManager::VERSION);
+   CAM::Template::Cache->setDBH($dbh) if ($CAM::Template::Cache::VERSION);
 }
 #--------------------------------#
 
@@ -632,37 +773,45 @@ Return a CAM::Session object for this application.  If one has not yet
 been created, make one now.  Note!  This must be called before the CGI
 header is printed, if at all.
 
+To use a class other than CAM::Session, set the C<sessionclass> config
+variable.
+
 =cut
 
 sub getSession
 {
    my $self = shift;
+   my $dbname = shift;
 
-   if (!$self->{session})
+   if (!exists $self->{session})
    {
-      if (!$self->loadModule("CAM::Session"))
+      my $class = $self->{config}->{sessionclass};
+      if (!$self->loadModule($class))
       {
-         $self->error("Internal error: Failed to load the CAM::Session library");
+         $self->error("Internal error: Failed to load the $class library");
       }
 
-      if (!$self->getDBH())
-      {
-         $self->error("No database connection, so a session could not be recorded");
-      }
       if ($self->{config}->{cookiename})
       {
-         CAM::Session->setCookieName($self->{config}->{cookiename});
+         $class->setCookieName($self->{config}->{cookiename});
       }
       if ($self->{config}->{sessiontable})
       {
-         CAM::Session->setTableName($self->{config}->{sessiontable});
+         $class->setTableName($self->{config}->{sessiontable});
       }
       if ($self->{config}->{sessiontime})
       {
-         CAM::Session->setExpiration($self->{config}->{sessiontime});
+         $class->setExpiration($self->{config}->{sessiontime});
       }
-      CAM::Session->setDBH($self->getDBH());
-      $self->{session} = CAM::Session->new();
+      if (!$class->getDBH())
+      {
+         if (!$self->getDBH($dbname))
+         {
+            $self->error("No database connection, so a session could not be recorded");
+         }
+         $class->setDBH($self->getDBH($dbname));
+      }
+      $self->{session} = $class->new();
    }
    return $self->{session};
 }
@@ -707,7 +856,7 @@ sub getTemplateCache {
 =item getEmailTemplate FILE, [KEY => VALUE, KEY => VALUE, ...]
 
 Creates, prefills and returns a CAM::EmailTemplate object.  This is
-very similar to the template() method.
+very similar to the getTemplate() method.
 
 If the 'mailhost' config variable is set, this instead uses
 CAM::EmailTemplate::SMTP.
@@ -731,7 +880,28 @@ sub getEmailTemplate {
    }
    return $self->_template($module, $file, undef, @_);
 }
+#--------------------------------#
 
+=item getPkgTemplate PKG, FILE, [KEY => VALUE, KEY => VALUE, ...]
+
+Creates, prefills and returns a template instance of the specified
+class.  That class should have a similar API to CAM::Template.  For
+example:
+
+    my $tmpl = $app->getPkgTemplate("CAM::PDFTemplate", "tmpl.pdf");
+    ...
+    $tmpl->print();
+
+=cut
+
+sub getPkgTemplate
+{
+   my $self = shift;
+   my $templatePkg = shift;
+   my $file = shift;
+
+   return $self->_template($templatePkg, $file, undef, @_);
+}
 #--------------------------------#
 # Internal function:
 # builds, fills and returns a template object
@@ -760,12 +930,18 @@ sub _template {
       $template = $module->new();
    }
 
-   my $dir = $self->{config}->{templatedir} || "";
-   $dir .= "/" if ($dir && $dir !~ /\/$/);
-   if (!$template->setFilename($dir . $file))
+   if (defined $file)
    {
-      $self->error("Internal error: problem locating the web page template")
-          unless ($self->{in_error});
+      my $dir = $self->{config}->{templatedir} || "";
+      if (defined $dir)
+      {
+         $dir =~ s,[/\\]$,,; # trim trailing sep char
+      }
+      if (!$template->setFilename(defined $dir && $dir ne "" ? File::Spec->catfile($dir, $file) : $file))
+      {
+         $self->error("Internal error: problem locating the web page template")
+             unless ($self->{in_error});
+      }
    }
    $self->prefillTemplate($template, @_);
 
@@ -785,6 +961,7 @@ keys can override earlier ones):
 
    - the configuration variables, including:
       - myURL => URL of the current script
+      - fullURL => URL of the current page, including CGI parameters and target
       - cgiurl => URL of the directory containing the current script
       - cgidir => directory containing the current script
       - many others...
@@ -906,8 +1083,15 @@ sub error {
    my $self = shift;
    my $msg = shift;
 
-   $msg = $self->{cgi}->escapeHTML($msg);
-   $msg =~ s/\n/<br>\n/gs;
+   if ($self->{cgi})
+   {
+      $msg = $self->{cgi}->escapeHTML($msg);
+      $msg =~ s/\n/<br>\n/gs;
+   }
+   else
+   {
+      $msg = "<pre>$msg</pre>";
+   }
 
    if ($self->{in_error})
    {
@@ -926,7 +1110,7 @@ sub error {
 
    if (!$errTmpl)
    {
-      print "Internal error: $msg\n";
+      print $msg,"\n";
    }
    else
    {
@@ -943,33 +1127,67 @@ sub error {
 
 Load a perl module, returning a boolean indicating success or failure.
 Shortcuts are taken if the module is already loaded, or loading has
-previously failed.
+previously failed.  This can be called as either a class or an
+instance method.  If called on an instance, any error messages are
+stored in $self->{load_error}.
 
 =cut
 
 sub loadModule {
-   my $self = shift;
+   my $pkg_or_self = shift;
    my $module = shift;
 
-   # Get a reference to the module VERSION variable
+   # Get a reference to the module VERSION and ISA variables
    my $ver_ref = eval "\\\$${module}::VERSION";
-   delete $self->{load_error};  # clear if it was previously set
-   if (!defined $$ver_ref) {
+   my $isa_ref = eval "\\\@${module}::ISA";
+   delete $pkg_or_self->{load_error} if (ref $pkg_or_self);  # clear if it was previously set
+   unless (defined($$ver_ref) || @$isa_ref > 0)
+   {
       local $SIG{__WARN__} = 'DEFAULT';
       local $SIG{__DIE__} = 'DEFAULT';
       eval "use $module;";
-      if ($@ || (!defined $$ver_ref)) {
-         $self->{load_error} = "$@" if ($@);
+      if ($@ || (!defined $$ver_ref && @$isa_ref == 0))
+      {
+         $pkg_or_self->{load_error} = "$@" if (ref($pkg_or_self) && $@);
+         # Set the version to a false-but-defined value to prevent re-eval
          $$ver_ref = 0;
       }
    }
-   return $$ver_ref;
+   # Note: this is deliberately not "defined $$ver_ref" unlike above
+   return $$ver_ref || @$isa_ref;
 }
 #--------------------------------#
 
+=item DESTROY
+
+Override this method to perform any final cleanup when the application
+run ends.  You can use this, perhaps, to do an logging or
+benchmarking.  For example:
+
+    package MyApp;
+    use CAM::App;
+    our @ISA = qw(CAM::App);
+    
+    sub new {
+       my $pkg = shift;
+       my $start = time();
+       my $self = $pkg->SUPER::new(@_);
+       $self->{start_time} = $start;
+       return $self;
+    }
+    sub DESTROY {
+       my $self = shift;
+       my $elapsed = time() - $self->{start_time};
+       print STDERR "elapsed time: $elapsed seconds\n";
+       $self->SUPER::DESTROY();
+    }
+
+=cut
+
 sub DESTROY
 {
-   # do nothing special, just here to silence warnings
+   # do nothing special, just here to silence warnings, and to let
+   # subclasses override
 }
 
 1;
@@ -979,6 +1197,6 @@ __END__
 
 =head1 AUTHOR
 
-Chris Dolan, Clotho Advanced Media, I<chris@clotho.com>
+Clotho Advanced Media Inc., I<cpan@clotho.com>
 
-=cut
+Primary developer: Chris Dolan
